@@ -15,6 +15,8 @@ class WiggleSat:
         self.J = self.J_base.copy()
         self.J_inv = np.linalg.inv(self.J)
 
+        self.use_motor = config['motor_dynamics']
+
     def update_inertia(self, theta):
         """
         Updates the inertia matrix based on the current boom angles, in base body frame.
@@ -60,7 +62,7 @@ class WiggleSat:
 
         self.update_inertia(theta)
 
-        tau_reaction = self.Booms.compute_reaction_torque(theta, theta_dot, u_boom, w)
+        theta_ddot,tau_reaction = self.Booms.compute_reaction_torque(theta, theta_dot, u_boom, w, self.use_motor)
         tau_mag = self.Magnetorquers.compute_torque(u_mag, B_body) # placeholder for B_body for now
         
         tau_total = tau_reaction + tau_mag
@@ -69,8 +71,5 @@ class WiggleSat:
         dw_dt = self.J_inv @ (tau_total - np.cross(w, self.J @ w))
         dq_dt = quat_kinematics(q, w)
 
-        # Joint dynamics
-        dtheta_dt = theta_dot
-        dtheta_dot_dt = np.array(u_boom)  # Controlled angular acceleration
 
-        return np.concatenate([dq_dt, dw_dt, dtheta_dt, dtheta_dot_dt])
+        return np.concatenate([dq_dt, dw_dt, theta_dot, theta_ddot])

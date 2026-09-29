@@ -53,11 +53,20 @@ if __name__ == "__main__":
                 [0.05, 0.0, 0.0],
                 [0.0, 0.05, 0.0],
                 [0.0, 0.0, 0.05]
-            ]
+            ],
+            'motor_config': {
+            'N_r': 50,             # 50 pole pairs (1.8 deg step angle)
+            'T_holding': 0.15,     # Peak holding torque [N*m]
+            'T_cog': 0.008,        # Cogging torque amplitude [N*m]
+            'N_cog': 200,          # Cogging frequency multiplier
+            'B_m': 1e-3,           # Bearing viscous friction [N*m*s/rad]
+            'T_coulomb': 0.002     # Coulomb dry friction [N*m]
+            }
         },
         'magnetorquers': {
             'm_max': 0.2
-        }
+        },
+        'motor_dynamics': True
     }
 
     controller = DirectInputController(
