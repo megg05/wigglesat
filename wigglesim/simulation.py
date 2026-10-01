@@ -10,9 +10,14 @@ class Simulator:
         self.sat = WiggleSat(config, init_state)
         self.sat.controller = controller
 
-    def run(self, sim_time=10.0, dt=0.01):
+    def run(self, sim_time=10.0, dt=0.01, rtol=1e-3, atol=1e-6):
+        """
+        dt is the control/logging interval; rtol/atol are the RK45 tolerances (solve_ivp's defaults).
+        Each solve only spans one dt, so the defaults already hold angular momentum to ~1e-12;
+        tighten them for stiffer dynamics (e.g. motor_dynamics=True) at the cost of runtime.
+        """
         steps = int(sim_time / dt)
-        time_history = np.linspace(0, sim_time, steps)
+        time_history = np.arange(steps) * dt
         state_history = []
 
         print("starting wiggle...")
@@ -26,7 +31,9 @@ class Simulator:
                 fun=lambda t_curr, y: self.sat.state_derivative(t_curr, y, u_boom, u_mag),
                 t_span=(t, t + dt),
                 y0=self.sat.state,
-                method='RK45'
+                method='RK45',
+                rtol=rtol,
+                atol=atol
             )
             self.sat.state = sol.y[:, -1]
 
@@ -46,9 +53,9 @@ if __name__ == "__main__":
         'J': np.diag([0.05, 0.05, 0.08]),
         'booms': {
             'boom_axes': [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
-            'boom_inertias': [0.001, 0.001, 0.001],
-            'm_booms': [0.1, 0.1, 0.1],
-            'l_booms': [0.5, 0.5, 0.5],
+            'm_rods': [0.1, 0.1, 0.1],
+            'm_tips': [0.05, 0.05, 0.05],
+            'l_rods': [0.5, 0.5, 0.5],
             'r_hinges': [
                 [0.05, 0.0, 0.0],
                 [0.0, 0.05, 0.0],
@@ -66,7 +73,7 @@ if __name__ == "__main__":
         'magnetorquers': {
             'm_max': 0.2
         },
-        'motor_dynamics': True
+        'motor_dynamics': False
     }
 
     controller = DirectInputController(

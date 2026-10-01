@@ -7,7 +7,7 @@ class MicroStepperMotor:
     """
 
     def __init__(self, config):
-        self.N_r = config.get('N_r', 50)               # Rotor tooth/pole pairs (50 for 1.8 deg stepper)
+        self.N_r = config.get('N_r', 50)               # Pole pairs (50 for 1.8 deg stepper)
         self.T_holding = config.get('T_holding', 0.15) # Peak holding torque [N*m]
         self.T_cog = config.get('T_cog', 0.008)        # Cogging torque peak amplitude [N*m]
         self.N_cog = config.get('N_cog', 200)          # Cogging cycles per revolution
@@ -29,6 +29,17 @@ class MicroStepperMotor:
         
         return tau_em + tau_cogging + tau_friction
 
+def default_boom_dirs(axes):
+    dirs = []
+    for a in np.asarray(axes, dtype=float):
+        a = a / np.linalg.norm(a)
+        ref = np.zeros(3)
+        ref[np.argmin(np.abs(a))] = 1.0           # coordinate axis least aligned with the hinge
+        d = ref - np.dot(ref, a) * a
+        dirs.append(d / np.linalg.norm(d))
+    return np.array(dirs)
+
+
 class BoomArray:
     """3 actuated 1-DOF booms mounted on the satellite chassis."""
     def __init__(self, config):
@@ -36,14 +47,23 @@ class BoomArray:
             axis / np.linalg.norm(axis) for axis in config['boom_axes']
         ])  # (3, 3) normalized hinge unit vectors
         
-        self.inertias = np.array(config['boom_inertias'])  # (3,) moments of inertia about hinges
-        self.m_booms = np.array(config.get('m_booms', [0.1, 0.1, 0.1]))  # kg
-        self.l_booms = np.array(config.get('l_booms', [0.5, 0.5, 0.5]))  # m
+        self.m_rods = np.array(config.get('m_rods', [0.1, 0.1, 0.1]))  # kg
+        self.m_tips = np.array(config.get('m_tips', [0.05, 0.05, 0.05]))  # kg
+        self.l_rods = np.array(config.get('l_rods', [0.5, 0.5, 0.5]))  # m
         self.r_hinges = np.array(config.get('r_hinges', [
             [0.05, 0.0, 0.0], 
             [0.0, 0.05, 0.0], 
             [0.0, 0.0, 0.05]
         ]))  # (3, 3) hinge attachment vectors in base body frame
+
+        if 'boom_dirs' in config:
+            d = np.array(config['boom_dirs'], dtype=float)
+            d = d - np.sum(d * self.axes, axis=1, keepdims=True) * self.axes
+            self.boom_dirs = d / np.linalg.norm(d, axis=1, keepdims=True)
+        else:
+            self.boom_dirs = default_boom_dirs(self.axes)
+
+        self.inertias = (1.0 / 3.0) * self.m_rods * (self.l_rods**2) + self.m_tips * (self.l_rods**2)
 
         motor_cfg = config.get('motor_config', {})
         self.motors = [MicroStepperMotor(motor_cfg) for _ in range(3)]
@@ -59,31 +79,74 @@ class BoomArray:
         ])
         return np.eye(3) + sin_t * K + (1.0 - cos_t) * (K @ K)
 
+    def geometry(self, i, theta_i):
+        """
+        Boom i at hinge angle theta_i, in the base body frame.
+        Returns (r_com, r_tip, J_rod_body): rod COM position, tip-mass position, and the rod's
+        inertia about its own COM (thin rod of length l: m*l^2/12 * (I - d d^T), d = boom direction).
+        """
+        d = self._get_boom_rotation(i, theta_i) @ self.boom_dirs[i]
+        l = self.l_rods[i]
+        r_com = self.r_hinges[i] + 0.5 * l * d
+        r_tip = self.r_hinges[i] + l * d
+        J_rod_body = (1.0 / 12.0) * self.m_rods[i] * l**2 * (np.eye(3) - np.outer(d, d))
+        return r_com, r_tip, J_rod_body
+
+    def momentum_vector(self, i, theta_i):
+        """
+        g_i(theta_i) = d(H)/d(theta_dot_i): angular momentum about the chassis CoM (body frame)
+        per unit hinge rate of boom i, with the chassis held fixed.
+
+            g_i = J_rod_body a + sum_over_masses m * r x (a x (r - r_hinge))
+
+        Reduces to J_boom * a when the hinge sits at the chassis CoM; otherwise it also has
+        off-axis components from the hinge offset.
+        """
+        a, r_h = self.axes[i], self.r_hinges[i]
+        r_com, r_tip, J_rod_body = self.geometry(i, theta_i)
+        g = J_rod_body @ a
+        for m, r in ((self.m_rods[i], r_com), (self.m_tips[i], r_tip)):
+            g = g + m * np.cross(r, np.cross(a, r - r_h))
+        return g
+
+    def momentum_vector_rate(self, i, theta_i):
+        """d(g_i)/d(theta_i), analytic."""
+        a, r_h = self.axes[i], self.r_hinges[i]
+        r_com, r_tip, J_rod_body = self.geometry(i, theta_i)
+        g_rate = np.cross(a, J_rod_body @ a)
+        for m, r in ((self.m_rods[i], r_com), (self.m_tips[i], r_tip)):
+            v = np.cross(a, r - r_h)                 # dr/dtheta
+            g_rate = g_rate + m * np.cross(r, np.cross(a, v))   # (v x v) term is zero
+        return g_rate
+
     def compute_reaction_torque(self, theta, theta_dot, alpha_booms, w_base, use_motor = False):
         """
-        Computes dynamic reaction torque and Coriolis torque acting on chassis from boom movement.
+        Torque on the chassis from boom motion, from conservation of total angular momentum
+        H = J(theta) w + sum_i g_i(theta_i) theta_dot_i :
+
+            tau_reaction = -sum_i [ g_i * theta_ddot_i + g_i' * theta_dot_i^2 + theta_dot_i * (w x g_i) ]
+
+        The first term is the direct reaction to boom acceleration, the second the centripetal
+        change of g_i with boom angle, and the third the gyroscopic coupling with chassis spin.
+        (The J_dot * w term lives in WiggleSat.state_derivative.)
+        Returns (theta_ddot, tau_reaction).
         """
         theta_ddot = np.zeros(3)
         tau_reaction = np.zeros(3)
         for i in range(3):
-            axis_i = self.axes[i]
-            J_boom = self.inertias[i]
-
             if use_motor:
-                tau_motor = self.motors[i].compute_motor_torque(theta[i], theta_dot[i], alpha_booms[i]) # assume zero commanded angle for now
-                theta_ddot[i] = float(tau_motor / J_boom)
-                
-                # Primary reaction torque from boom joint angular acceleration
-                tau_reaction -= tau_motor * axis_i
+                tau_motor = self.motors[i].compute_motor_torque(theta[i], theta_dot[i], alpha_booms[i])
+                theta_ddot[i] = float(tau_motor / self.inertias[i])
             else:
                 theta_ddot[i] = alpha_booms[i]
-                # Primary reaction torque from boom joint angular acceleration
-                tau_reaction -= J_boom * alpha_booms[i] * axis_i
-            
-            # Gyroscopic/Coriolis torque coupling boom joint rate and base angular velocity
-            tau_reaction -= J_boom * np.cross(w_base, theta_dot[i] * axis_i)
 
-        return theta_ddot,tau_reaction
+            g = self.momentum_vector(i, theta[i])
+            g_rate = self.momentum_vector_rate(i, theta[i])
+            tau_reaction -= (g * theta_ddot[i]
+                             + g_rate * theta_dot[i] ** 2
+                             + theta_dot[i] * np.cross(w_base, g))
+
+        return theta_ddot, tau_reaction
 
 
 class Magnetorquer:

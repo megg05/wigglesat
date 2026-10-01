@@ -1,6 +1,9 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
+
+from models.actuators import BoomArray
 
 def plot_simulation_results(t_hist, x_hist, save_fig=False, filename="wigglesat_results.png"):
     """
@@ -54,51 +57,105 @@ def plot_simulation_results(t_hist, x_hist, save_fig=False, filename="wigglesat_
     plt.show()
 
 
-def animate_booms_3d(t_hist, x_hist, config, stride=5, save_gif=False):
+def _quat_to_rotmat(q, body_to_inertial=True):
     """
-    Creates a 3D animation showing the motion of the 3 satellite booms in time.
+    Rotation matrix from a scalar-first quaternion [q0, q1, q2, q3].
+    Assumes q rotates body-frame vectors into the inertial frame; set
+    body_to_inertial=False if core.attitude uses the opposite convention.
+    """
+    q = np.asarray(q, dtype=float)
+    a, b, c, d = q / np.linalg.norm(q)
+    R = np.array([
+        [1 - 2*(c*c + d*d), 2*(b*c - a*d),     2*(b*d + a*c)],
+        [2*(b*c + a*d),     1 - 2*(b*b + d*d), 2*(c*d - a*b)],
+        [2*(b*d - a*c),     2*(c*d + a*b),     1 - 2*(b*b + c*c)],
+    ])
+    return R if body_to_inertial else R.T
+
+
+def _cube_geometry(side):
+    """Vertices (8, 3) and face index lists for an axis-aligned cube centred on the origin."""
+    h = side / 2.0
+    verts = np.array([[sx * h, sy * h, sz * h]
+                      for sx in (-1, 1) for sy in (-1, 1) for sz in (-1, 1)])
+    # vertex index = 4*(sx>0) + 2*(sy>0) + (sz>0)
+    faces = [[0, 1, 3, 2], [4, 5, 7, 6],   # -x, +x
+             [0, 1, 5, 4], [2, 3, 7, 6],   # -y, +y
+             [0, 2, 6, 4], [1, 3, 7, 5]]   # -z, +z
+    return verts, faces
+
+
+def _unit_sphere_quads(n_lat=8, n_lon=14):
+    """Quad mesh of the unit sphere as an array of shape (n_quads, 4, 3)."""
+    lat = np.linspace(0, np.pi, n_lat + 1)
+    lon = np.linspace(0, 2 * np.pi, n_lon + 1)
+    P = np.array([[[np.sin(la) * np.cos(lo), np.sin(la) * np.sin(lo), np.cos(la)]
+                   for lo in lon] for la in lat])
+    quads = [[P[i, j], P[i + 1, j], P[i + 1, j + 1], P[i, j + 1]]
+             for i in range(n_lat) for j in range(n_lon)]
+    return np.array(quads)
+
+
+def animate_booms_3d(t_hist, x_hist, config, stride=5, save_gif=False,
+                     cube_size=0.1, tip_radius=None, body_to_inertial=True):
+    """
+    Creates a 3D animation of the satellite: a cube centred on the chassis CoM,
+    the 3 booms, and a sphere at the end of each boom for its tip mass.
+
+    The whole assembly is rotated by the attitude quaternion (x_hist[:, 0:4]), so
+    the cube tumbles in response to the boom reaction torques.
+
+    cube_size        : chassis cube edge length [m] (default 0.1 puts the default hinges on the face centres)
+    tip_radius       : sphere radius [m]; scalar, length-3 sequence, or None to scale with
+                       tip mass (0.03 m at 0.05 kg, volume-proportional)
+    body_to_inertial : quaternion convention; flip if the cube appears to rotate the wrong way
     """
     fig = plt.figure(figsize=(8, 8))
     ax = fig.add_subplot(111, projection='3d')
     ax.set_title('3D Boom Configuration Motion', fontweight='bold')
 
-    # Retrieve boom geometry specs
-    hinges = np.array(config['booms']['r_hinges'])
-    l_booms = config['booms']['l_booms']
-    boom_axes = np.array(config['booms']['boom_axes'])
+    # Use the same boom geometry as the dynamics (hinges, lengths, boom directions, tip masses)
+    booms = BoomArray(config['booms'])
+    hinges = booms.r_hinges
+    l_booms = booms.l_rods
+    m_tips = booms.m_tips
+
+    if tip_radius is None:
+        tip_radii = 0.03 * (m_tips / 0.05) ** (1.0 / 3.0)
+    else:
+        tip_radii = np.broadcast_to(np.asarray(tip_radius, dtype=float), (3,))
 
     # Downsample history for smooth animation
     t_sub = t_hist[::stride]
     x_sub = x_hist[::stride]
 
-    def _get_boom_rotation(i, theta_i):
-        a = boom_axes[i] / np.linalg.norm(boom_axes[i])
-        cos_t, sin_t = np.cos(theta_i), np.sin(theta_i)
-        K = np.array([[0, -a[2], a[1]], [a[2], 0, -a[0]], [-a[1], a[0], 0]])
-        return np.eye(3) + sin_t * K + (1.0 - cos_t) * (K @ K)
-
-    # Compute a local reference vector orthogonal to each hinge axis
-    boom_ref_dirs = []
-    for axis in boom_axes:
-        a = axis / np.linalg.norm(axis)
-        # Choose a reference vector not parallel to 'a'
-        ref = np.array([0.0, 1.0, 0.0]) if np.allclose(a, [1, 0, 0]) else np.array([1.0, 0.0, 0.0])
-        # Project and normalize to make it orthogonal to axis 'a'
-        ortho = ref - np.dot(ref, a) * a
-        boom_ref_dirs.append(ortho / np.linalg.norm(ortho))
-
-    # Initialize 3D lines for booms
     colors = ['r', 'g', 'b']
+
+    # Chassis cube (rotates with attitude)
+    cube_verts, cube_faces = _cube_geometry(cube_size)
+    cube = Poly3DCollection([cube_verts[f] for f in cube_faces],
+                            facecolor='lightgray', edgecolor='k', alpha=0.35, linewidths=1.2)
+    ax.add_collection3d(cube)
+
+    # Boom lines and tip-mass spheres
     lines = [ax.plot([], [], [], color=colors[i], lw=3, label=f'Boom {i+1}')[0] for i in range(3)]
-    
+    sphere_quads = _unit_sphere_quads()
+    spheres = []
+    for i in range(3):
+        sph = Poly3DCollection(sphere_quads * tip_radii[i], facecolor=colors[i],
+                               edgecolor='none', alpha=0.9)
+        ax.add_collection3d(sph)
+        spheres.append(sph)
+
     # Chassis origin point
-    ax.scatter([0], [0], [0], color='black', s=100, label='Chassis CoM')
+    ax.scatter([0], [0], [0], color='black', s=40, label='Chassis CoM')
 
     # Set 3D boundaries
-    max_len = np.max(l_booms) + np.max(np.abs(hinges)) + 0.1
+    max_len = np.max(l_booms) + np.max(np.abs(hinges)) + np.max(tip_radii) + 0.1
     ax.set_xlim([-max_len, max_len])
     ax.set_ylim([-max_len, max_len])
     ax.set_zlim([-max_len, max_len])
+    ax.set_box_aspect((1, 1, 1))
     ax.set_xlabel('X [m]')
     ax.set_ylabel('Y [m]')
     ax.set_zlabel('Z [m]')
@@ -108,29 +165,35 @@ def animate_booms_3d(t_hist, x_hist, config, stride=5, save_gif=False):
 
     def update(frame):
         state = x_sub[frame]
+        R_att = _quat_to_rotmat(state[:4], body_to_inertial)
         theta = state[7:10]
-        
+
+        # Cube: body-frame vertices rotated into the inertial frame
+        v = cube_verts @ R_att.T
+        cube.set_verts([v[f] for f in cube_faces])
+
         for i in range(3):
-            R_i = _get_boom_rotation(i, theta[i])
             hinge_pt = hinges[i]
-            
-            # Use the orthogonal reference direction for the unrotated boom body
-            r_boom_unrotated = boom_ref_dirs[i] * l_booms[i]
-            tip_pt = hinge_pt + R_i @ r_boom_unrotated
+            tip_pt = booms.geometry(i, theta[i])[1]  # tip-mass position in the body frame
+
+            hinge_w = R_att @ hinge_pt
+            tip_w = R_att @ tip_pt
 
             # Draw line from hinge attachment point to tip of boom
             lines[i].set_data_3d(
-                [hinge_pt[0], tip_pt[0]],
-                [hinge_pt[1], tip_pt[1]],
-                [hinge_pt[2], tip_pt[2]]
+                [hinge_w[0], tip_w[0]],
+                [hinge_w[1], tip_w[1]],
+                [hinge_w[2], tip_w[2]]
             )
+            spheres[i].set_verts(sphere_quads * tip_radii[i] + tip_w)
         time_text.set_text(f'Time: {t_sub[frame]:.2f} s')
-        return lines + [time_text]
+        return [cube] + lines + spheres + [time_text]
 
     anim = FuncAnimation(fig, update, frames=len(t_sub), interval=30, blit=False)
-    
+
     if save_gif:
         anim.save('wigglesat_booms.gif', writer='pillow', fps=30)
         print("Animation saved as wigglesat_booms.gif")
 
     plt.show()
+    return anim
