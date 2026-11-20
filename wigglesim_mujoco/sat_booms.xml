@@ -1,6 +1,6 @@
-<mujoco model="sat_booms">
-  <compiler angle="degree" autolimits="true"/>
-  <option timestep="0.002" gravity="0 0 0" integrator="implicitfast"/>
+<mujoco model="multipleshapes">
+  <compiler angle="degree" inertiafromgeom="false"/>
+  <option timestep="0.0001" gravity="0 0 0" integrator="implicitfast"/>
 
   <visual>
     <global offwidth="1280" offheight="720"/>
@@ -8,64 +8,63 @@
 
   <asset>
     <texture type="skybox" builtin="gradient" rgb1="0.05 0.05 0.12" rgb2="0 0 0" width="512" height="512"/>
-    <material name="bus_mat"  rgba="0.85 0.85 0.9 1"/>
-    <material name="boom_x"   rgba="0.9 0.2 0.2 1"/>
-    <material name="boom_y"   rgba="0.2 0.8 0.3 1"/>
-    <material name="boom_z"   rgba="0.2 0.4 0.95 1"/>
+    <material name="bus_mat" rgba="0.85 0.85 0.9 1"/>
+    <material name="cyan"    rgba="0 1 1 1"/>
   </asset>
 
   <default>
-    <joint type="hinge" limited="true" range="-90 90" damping="0.01" armature="0.001"/>
-    <geom contype="0" conaffinity="0"/>   <!-- no contacts needed in free space -->
-    <motor ctrlrange="-0.5 0.5" ctrllimited="true"/>
+    <joint type="hinge" limited="false" damping="0.01" armature="0.1264"/>
+    <geom contype="0" conaffinity="0"/>
+    <motor ctrlrange="-150 150" ctrllimited="true"/>
   </default>
 
   <worldbody>
-    <light pos="2 -2 3" dir="-1 1 -1.5" diffuse="0.9 0.9 0.9"/>
+    <light pos="4 -4 6" dir="-1 1 -1.5" diffuse="0.9 0.9 0.9"/>
 
-    <!-- Satellite bus: 0.2 x 0.2 x 0.3 m, 10 kg -->
-    <body name="bus" pos="0 0 0">
+    <!-- sc_bus: 3 x 1 x 1 m box, 10 kg -->
+    <body name="sc_bus" pos="0 0 0">
       <freejoint name="bus_free"/>
-      <geom name="bus_box" type="box" size="0.1 0.1 0.15" mass="10" material="bus_mat"/>
-      <site name="imu" pos="0 0 0" size="0.01"/>
+      <inertial pos="0 0 0" mass="10" diaginertia="1.66667 8.33333 8.33333"/>
+      <geom name="bus_box" type="box" size="1.5 0.5 0.5" material="bus_mat"/>
+      <site name="imu" pos="0 0 0" size="0.02"/>
 
-      <!-- Boom X: on +x face, extends along +x, swings about z (in the x-y plane) -->
-      <body name="boom_x" pos="0.1 0 0">
-        <joint name="hinge_x" axis="0 0 1"/>
-        <geom type="capsule" fromto="0 0 0 0.5 0 0" size="0.01" mass="0.4" material="boom_x"/>
-        <geom type="sphere" pos="0.5 0 0" size="0.03" mass="0.3" material="boom_x"/>
+      <!-- x_arm: joint on the +x end face, axis x, arm extends along +z, 2 kg, 0.2 x 0.2 x 3 m -->
+      <body name="x_arm_link" pos="1.5 0 0">
+        <joint name="x_arm_joint" axis="1 0 0"/>
+        <inertial pos="0 0 1.5" mass="2" diaginertia="1.50667 1.50667 0.0133333"/>
+        <geom type="box" size="0.1 0.1 1.5" pos="0 0 1.5" material="cyan"/>
       </body>
 
-      <!-- Boom Y: on +y face, extends along +y, swings about x (in the y-z plane) -->
-      <body name="boom_y" pos="0 0.1 0">
-        <joint name="hinge_y" axis="1 0 0"/>
-        <geom type="capsule" fromto="0 0 0 0 0.5 0" size="0.01" mass="0.4" material="boom_y"/>
-        <geom type="sphere" pos="0 0.5 0" size="0.03" mass="0.3" material="boom_y"/>
+      <!-- y_arm: joint on the +y face, axis y, arm extends along +z -->
+      <body name="y_arm_link" pos="0 0.5 0">
+        <joint name="y_arm_joint" axis="0 1 0"/>
+        <inertial pos="0 0 1.5" mass="2" diaginertia="1.50667 1.50667 0.0133333"/>
+        <geom type="box" size="0.1 0.1 1.5" pos="0 0 1.5" material="cyan"/>
       </body>
 
-      <!-- Boom Z: on +z face, extends along +z, swings about y (in the z-x plane) -->
-      <body name="boom_z" pos="0 0 0.15">
-        <joint name="hinge_z" axis="0 1 0"/>
-        <geom type="capsule" fromto="0 0 0 0 0 0.5" size="0.01" mass="0.4" material="boom_z"/>
-        <geom type="sphere" pos="0 0 0.5" size="0.03" mass="0.3" material="boom_z"/>
+      <!-- z_arm: joint on the +z face, axis z, arm extends along -x -->
+      <body name="z_arm_link" pos="0 0 0.5">
+        <joint name="z_arm_joint" axis="0 0 1"/>
+        <inertial pos="-1.5 0 0" mass="2" diaginertia="0.0133333 1.50667 1.50667"/>
+        <geom type="box" size="1.5 0.1 0.1" pos="-1.5 0 0" material="cyan"/>
       </body>
     </body>
   </worldbody>
 
   <actuator>
-    <motor name="act_x" joint="hinge_x" gear="1"/>
-    <motor name="act_y" joint="hinge_y" gear="1"/>
-    <motor name="act_z" joint="hinge_z" gear="1"/>
+    <motor name="act_x" joint="x_arm_joint" gear="1"/>
+    <motor name="act_y" joint="y_arm_joint" gear="1"/>
+    <motor name="act_z" joint="z_arm_joint" gear="1"/>
   </actuator>
 
   <sensor>
-    <gyro        name="gyro"     site="imu"/>
-    <framequat   name="quat"     objtype="site" objname="imu"/>
-    <jointpos    name="q_x"      joint="hinge_x"/>
-    <jointpos    name="q_y"      joint="hinge_y"/>
-    <jointpos    name="q_z"      joint="hinge_z"/>
-    <jointvel    name="qd_x"     joint="hinge_x"/>
-    <jointvel    name="qd_y"     joint="hinge_y"/>
-    <jointvel    name="qd_z"     joint="hinge_z"/>
+    <gyro      name="gyro" site="imu"/>
+    <framequat name="quat" objtype="site" objname="imu"/>
+    <jointpos  name="q_x"  joint="x_arm_joint"/>
+    <jointpos  name="q_y"  joint="y_arm_joint"/>
+    <jointpos  name="q_z"  joint="z_arm_joint"/>
+    <jointvel  name="qd_x" joint="x_arm_joint"/>
+    <jointvel  name="qd_y" joint="y_arm_joint"/>
+    <jointvel  name="qd_z" joint="z_arm_joint"/>
   </sensor>
 </mujoco>

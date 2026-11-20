@@ -1,0 +1,78 @@
+<mujoco model="multipleshapes">
+  <!-- torsional motor mount, models padding in twist about shaft axis -->
+  <compiler angle="degree" inertiafromgeom="false" />
+  <option timestep="0.0001" gravity="0 0 0" integrator="implicitfast" />
+  <visual>
+    <global offwidth="1280" offheight="720" />
+  </visual>
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="0.05 0.05 0.12" rgb2="0 0 0" width="512" height="512" />
+    <material name="bus_mat" rgba="0.85 0.85 0.9 1" />
+    <material name="cyan" rgba="0 1 1 1" />
+  </asset>
+  <default>
+    <joint type="hinge" limited="false" damping="0.01" armature="0.1264" />
+    <geom contype="0" conaffinity="0" />
+    <motor ctrlrange="-150 150" ctrllimited="true" />
+  </default>
+  <worldbody>
+    <light pos="4 -4 6" dir="-1 1 -1.5" diffuse="0.9 0.9 0.9" />
+    <body name="sc_bus" pos="0 0 0">
+      <freejoint name="bus_free" />
+      <inertial pos="0 0 0" mass="10" diaginertia="1.66667 8.33333 8.33333" />
+      <geom name="bus_box" type="box" size="1.5 0.5 0.5" material="bus_mat" />
+      <site name="imu" pos="0 0 0" size="0.02" />
+      <body name="x_motor_housing" pos="1.5 0 0">
+        <joint name="x_mount_joint" axis="1 0 0" armature="0" stiffness="500" damping="5" springref="0" />
+        <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001" />
+        <body name="x_output_link">
+          <joint name="x_motor_joint" axis="1 0 0" />
+          <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001" />
+          <body name="x_arm_link">
+            <inertial pos="0 0 1.5" mass="2" diaginertia="1.50667 1.50667 0.0133333" />
+            <geom type="box" size="0.1 0.1 1.5" pos="0 0 1.5" material="cyan" />
+          </body>
+        </body>
+      </body>
+      <body name="y_motor_housing" pos="0 0.5 0">
+        <joint name="y_mount_joint" axis="0 1 0" armature="0" stiffness="500" damping="5" springref="0" />
+        <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001" />
+        <body name="y_output_link">
+          <joint name="y_motor_joint" axis="0 1 0" />
+          <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001" />
+          <body name="y_arm_link">
+            <inertial pos="0 0 1.5" mass="2" diaginertia="1.50667 1.50667 0.0133333" />
+            <geom type="box" size="0.1 0.1 1.5" pos="0 0 1.5" material="cyan" />
+          </body>
+        </body>
+      </body>
+      <body name="z_motor_housing" pos="0 0 0.5">
+        <joint name="z_mount_joint" axis="0 0 1" armature="0" stiffness="500" damping="5" springref="0" />
+        <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001" />
+        <body name="z_output_link">
+          <joint name="z_motor_joint" axis="0 0 1" />
+          <inertial pos="0 0 0" mass="0.05" diaginertia="0.0001 0.0001 0.0001" />
+          <body name="z_arm_link">
+            <inertial pos="-1.5 0 0" mass="2" diaginertia="0.0133333 1.50667 1.50667" />
+            <geom type="box" size="1.5 0.1 0.1" pos="-1.5 0 0" material="cyan" />
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="act_x" joint="x_motor_joint" gear="1" />
+    <motor name="act_y" joint="y_motor_joint" gear="1" />
+    <motor name="act_z" joint="z_motor_joint" gear="1" />
+  </actuator>
+  <sensor>
+    <gyro name="gyro" site="imu" />
+    <framequat name="quat" objtype="site" objname="imu" />
+    <jointpos name="q_x" joint="x_mount_joint" />
+    <jointpos name="q_y" joint="y_mount_joint" />
+    <jointpos name="q_z" joint="z_mount_joint" />
+    <jointvel name="qd_x" joint="x_mount_joint" />
+    <jointvel name="qd_y" joint="y_mount_joint" />
+    <jointvel name="qd_z" joint="z_mount_joint" />
+  </sensor>
+</mujoco>
