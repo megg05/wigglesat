@@ -102,7 +102,7 @@ def test_boom_directions_are_unit_and_perpendicular_to_hinge(sat):
     np.testing.assert_allclose(np.sum(d * a, axis=1), 0.0, atol=1e-14)
 
 
-@pytest.mark.parametrize("i", range(3))
+@pytest.mark.parametrize("i", range(3)) ####################################33
 def test_every_boom_changes_inertia_when_rotated(sat, i):
     """A boom lying along its own hinge axis would be inert; none may be."""
     J0 = sat.update_inertia(ZERO3).copy()
